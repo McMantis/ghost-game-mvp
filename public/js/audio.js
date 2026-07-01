@@ -1,0 +1,193 @@
+// All sound is procedural WebAudio — no asset files needed.
+let ctx = null;
+let master = null;
+
+function ac() {
+  if (!ctx) {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    master = ctx.createGain();
+    master.gain.value = 0.8;
+    master.connect(ctx.destination);
+  }
+  if (ctx.state === 'suspended') ctx.resume();
+  return ctx;
+}
+export function unlock() { ac(); }
+
+let noiseBuf = null;
+function noise() {
+  const c = ac();
+  if (!noiseBuf) {
+    noiseBuf = c.createBuffer(1, c.sampleRate * 2, c.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const src = c.createBufferSource();
+  src.buffer = noiseBuf;
+  return src;
+}
+
+function env(gainNode, t0, a, peak, dur) {
+  gainNode.gain.setValueAtTime(0.0001, t0);
+  gainNode.gain.exponentialRampToValueAtTime(peak, t0 + a);
+  gainNode.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+}
+
+// distance -> volume (rough positional audio)
+const distVol = d => Math.max(0, Math.min(1, 1.2 - d / 18));
+
+export function knock(dist = 0) {
+  const v = distVol(dist); if (v <= 0) return;
+  const c = ac(), t = c.currentTime;
+  const n = noise(), f = c.createBiquadFilter(), g = c.createGain();
+  f.type = 'lowpass'; f.frequency.value = 320;
+  env(g, t, 0.005, 0.7 * v, 0.16);
+  n.connect(f).connect(g).connect(master);
+  n.start(t); n.stop(t + 0.2);
+}
+
+export function scrape(dist = 0) {
+  const v = distVol(dist); if (v <= 0) return;
+  const c = ac(), t = c.currentTime;
+  const n = noise(), f = c.createBiquadFilter(), g = c.createGain();
+  f.type = 'bandpass'; f.frequency.setValueAtTime(180, t); f.frequency.linearRampToValueAtTime(90, t + 0.7);
+  env(g, t, 0.05, 0.5 * v, 0.8);
+  n.connect(f).connect(g).connect(master);
+  n.start(t); n.stop(t + 0.85);
+}
+
+export function whoosh(dist = 0) {
+  const v = distVol(dist); if (v <= 0) return;
+  const c = ac(), t = c.currentTime;
+  const n = noise(), f = c.createBiquadFilter(), g = c.createGain();
+  f.type = 'bandpass'; f.frequency.setValueAtTime(2000, t); f.frequency.exponentialRampToValueAtTime(300, t + 0.4);
+  env(g, t, 0.03, 0.35 * v, 0.45);
+  n.connect(f).connect(g).connect(master);
+  n.start(t); n.stop(t + 0.5);
+}
+
+export function thud(dist = 0) {
+  const v = distVol(dist); if (v <= 0) return;
+  const c = ac(), t = c.currentTime;
+  const o = c.createOscillator(), g = c.createGain();
+  o.type = 'sine'; o.frequency.setValueAtTime(120, t); o.frequency.exponentialRampToValueAtTime(35, t + 0.25);
+  env(g, t, 0.005, 0.9 * v, 0.3);
+  o.connect(g).connect(master);
+  o.start(t); o.stop(t + 0.35);
+}
+
+export function rumble(dur = 1.6, dist = 0) {
+  const v = distVol(dist); if (v <= 0) return;
+  const c = ac(), t = c.currentTime;
+  const n = noise(), f = c.createBiquadFilter(), g = c.createGain();
+  f.type = 'lowpass'; f.frequency.value = 70;
+  env(g, t, 0.15, 0.8 * v, dur);
+  n.connect(f).connect(g).connect(master);
+  n.start(t); n.stop(t + dur + 0.1);
+}
+
+export function slam(dist = 0) {
+  const v = Math.max(0.25, distVol(dist));
+  const c = ac(), t = c.currentTime;
+  const n = noise(), f = c.createBiquadFilter(), g = c.createGain();
+  f.type = 'lowpass'; f.frequency.value = 200;
+  env(g, t, 0.004, 1.1 * v, 0.5);
+  n.connect(f).connect(g).connect(master);
+  n.start(t); n.stop(t + 0.55);
+  thud(dist);
+}
+
+export function scream() {
+  const c = ac(), t = c.currentTime;
+  const o = c.createOscillator(), g = c.createGain(), f = c.createBiquadFilter();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(700, t);
+  o.frequency.exponentialRampToValueAtTime(1400, t + 0.12);
+  o.frequency.exponentialRampToValueAtTime(250, t + 0.9);
+  f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 2;
+  env(g, t, 0.01, 0.9, 1.0);
+  o.connect(f).connect(g).connect(master);
+  o.start(t); o.stop(t + 1.05);
+  const n = noise(), ng = c.createGain(), nf = c.createBiquadFilter();
+  nf.type = 'highpass'; nf.frequency.value = 900;
+  env(ng, t, 0.01, 0.5, 0.9);
+  n.connect(nf).connect(ng).connect(master);
+  n.start(t); n.stop(t + 0.95);
+}
+
+export function roar() {
+  const c = ac(), t = c.currentTime;
+  const o = c.createOscillator(), g = c.createGain(), f = c.createBiquadFilter();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(60, t);
+  o.frequency.linearRampToValueAtTime(140, t + 0.5);
+  o.frequency.linearRampToValueAtTime(45, t + 1.6);
+  f.type = 'lowpass'; f.frequency.value = 400;
+  env(g, t, 0.05, 0.9, 1.8);
+  o.connect(f).connect(g).connect(master);
+  o.start(t); o.stop(t + 1.9);
+  rumble(2.2, 0);
+}
+
+export function chime() {
+  const c = ac(), t = c.currentTime;
+  for (const [i, fr] of [660, 880].entries()) {
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = 'sine'; o.frequency.value = fr;
+    env(g, t + i * 0.08, 0.01, 0.25, 0.5);
+    o.connect(g).connect(master);
+    o.start(t + i * 0.08); o.stop(t + i * 0.08 + 0.55);
+  }
+}
+
+export function banish() {
+  const c = ac(), t = c.currentTime;
+  for (const [i, fr] of [440, 550, 660, 880].entries()) {
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = 'triangle'; o.frequency.value = fr;
+    env(g, t + i * 0.12, 0.02, 0.3, 1.2);
+    o.connect(g).connect(master);
+    o.start(t + i * 0.12); o.stop(t + i * 0.12 + 1.3);
+  }
+}
+
+// ---- continuous loops ----
+
+let beepTimer = null, beepLevel = 0;
+export function setEmfBeep(level) {
+  if (level === beepLevel) return;
+  beepLevel = level;
+  if (beepTimer) { clearInterval(beepTimer); beepTimer = null; }
+  if (level <= 0) return;
+  const period = [0, 900, 550, 330, 190, 110][Math.min(5, level)];
+  beepTimer = setInterval(() => {
+    const c = ac(), t = c.currentTime;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = 'square'; o.frequency.value = level >= 5 ? 1200 : 880;
+    env(g, t, 0.005, 0.12, 0.07);
+    o.connect(g).connect(master);
+    o.start(t); o.stop(t + 0.08);
+  }, period);
+}
+
+let heartTimer = null, heartRate = 0;
+export function setHeartbeat(dread) {
+  const rate = dread < 0.15 ? 0 : Math.round(600 + (1 - dread) * 900); // ms between beats
+  if (Math.abs(rate - heartRate) < 60) return;
+  heartRate = rate;
+  if (heartTimer) { clearInterval(heartTimer); heartTimer = null; }
+  if (!rate) return;
+  const beat = () => {
+    const c = ac(), t = c.currentTime;
+    for (const dt of [0, 0.18]) {
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = 'sine'; o.frequency.value = 55;
+      env(g, t + dt, 0.01, dt ? 0.32 : 0.45, 0.16);
+      o.connect(g).connect(master);
+      o.start(t + dt); o.stop(t + dt + 0.2);
+    }
+  };
+  heartTimer = setInterval(beat, rate);
+}
+
+export function stopLoops() { setEmfBeep(0); setHeartbeat(0); }

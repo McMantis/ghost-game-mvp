@@ -1,0 +1,16 @@
+{
+  "name": "ghost-game-mvp",
+  "version": "0.1.0",
+  "description": "Untitled Ghost Game — Phase 1 MVP playtest (Poltergeist vs generic hunters)",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.17.0"
+  }
+}
