@@ -6,7 +6,7 @@
 // Usage: node scripts/testroom.js
 import WebSocket from 'ws';
 
-const ws = new WebSocket('ws://localhost:3000');
+const ws = new WebSocket(`ws://localhost:${process.env.PORT || 3000}`);
 let me = null, myRole = null, started = false;
 const send = m => ws.send(JSON.stringify(m));
 

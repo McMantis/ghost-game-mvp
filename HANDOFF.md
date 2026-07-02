@@ -15,30 +15,21 @@ before any role asymmetry exists. Built 2026-07-01/02.
 - There is also a `.claude/launch.json` in the old session's cwd
   (`C:\Users\jacob\OneDrive\Desktop\Bibs&Aprons\MVP`) with a "ghost-game" preview config.
 
-## ⚠️ OPEN BUG — fix this first (diagnosed, one-line fix, NOT yet applied)
+## ✅ FIXED (2026-07-02) — WASD teleport-to-spawn NaN bug
 
-**Symptom:** any WASD press teleports you back to spawn with a red banner
-`camera state went NaN (pos NaN,1.6,NaN …)`. Mouse-look works fine.
+**Symptom was:** any WASD press teleported you back to spawn with a red banner
+`camera state went NaN (pos NaN,1.6,NaN …)`. Mouse-look worked fine.
 
-**Root cause (confirmed):** `public/js/game.js:368-369` reads movement speeds from the
-server-sent tuning object — `t.HUNTER_WALK`, `t.HUNTER_SPRINT`, `t.GHOST_SPEED`,
-`t.RAMPAGE_SPEED` — but the `TUNE` block in `server/game.js` **never defines those four keys**
-(grep confirms zero hits). So `speed = undefined` → velocity NaN → position NaN.
-The NaN self-heal guard then resets to spawn each frame, which is the "teleporting" Jacob saw.
+**Root cause:** `public/js/game.js:368-369` reads movement speeds from the server-sent
+tuning object — `t.HUNTER_WALK`, `t.HUNTER_SPRINT`, `t.GHOST_SPEED`, `t.RAMPAGE_SPEED` —
+but the `TUNE` block in `server/game.js` never defined those four keys.
+So `speed = undefined` → velocity NaN → position NaN → NaN self-heal reset to spawn each frame.
 
-**Fix:** add to the `TUNE` object in `server/game.js` (with the other tuning constants):
-
-```js
-HUNTER_WALK: 4,
-HUNTER_SPRINT: 6,
-GHOST_SPEED: 4.8,
-RAMPAGE_SPEED: 6.6,
-```
-
-Then **restart the server** (it's a server-side file) and hard-refresh clients.
-Verify by actually pressing WASD in a real browser — automated tests missed this because they
-teleported positions instead of pressing keys. `scripts/testroom.js` (see below) makes solo
-verification easy.
+**Fix applied:** the four speed keys added to `TUNE` in `server/game.js`
+(HUNTER_WALK 4, HUNTER_SPRINT 6, GHOST_SPEED 4.8, RAMPAGE_SPEED 6.6).
+Verified with real key events in a real browser (walk 4 m/s, sprint 6 m/s, positions finite,
+no banner). Restart any long-running server and hard-refresh clients to pick it up.
+`scripts/testroom.js` now respects `PORT` for testing against non-3000 servers.
 
 ## Architecture (files)
 

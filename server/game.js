@@ -13,6 +13,11 @@ export const TUNE = {
   METER_MAX: 100,
   LESSER_AT: 33,          // Hurl/Clutter unlock threshold (~1/3 meter per doc)
 
+  HUNTER_WALK: 4,         // movement speeds (m/s) — client reads these from the sent tune object
+  HUNTER_SPRINT: 6,
+  GHOST_SPEED: 4.8,
+  RAMPAGE_SPEED: 6.6,
+
   HAUNT_GAIN: 7,          // meter per baseline haunt WITH a hunter in proximity
   HAUNT_RANGE: 2.8,       // ghost must be this close to a prop to haunt it
   PROX_RADIUS: 10,        // a hunter within this of the prop => points (doc's proximity rule)
