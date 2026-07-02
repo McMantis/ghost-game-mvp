@@ -6,63 +6,10 @@ import {
   rooms, roomAt, doors, props, ritualCircle, componentSpots,
   hunterSpawns, ghostSpawn,
 } from '../shared/map.js';
+// ALL balance numbers live in shared/tune.js — the settings file. Tune there.
+import { TUNE } from '../shared/tune.js';
 
-// Every number the design doc calls a "starting position, not a spec".
-// Tune here after playtests.
-export const TUNE = {
-  METER_MAX: 100,
-  LESSER_AT: 33,          // Hurl/Clutter unlock threshold (~1/3 meter per doc)
-
-  HUNTER_WALK: 4,         // movement speeds (m/s) — client reads these from the sent tune object
-  HUNTER_SPRINT: 6,
-  GHOST_SPEED: 4.8,
-  RAMPAGE_SPEED: 6.6,
-
-  HAUNT_GAIN: 7,          // meter per baseline haunt WITH a hunter in proximity
-  HAUNT_RANGE: 2.8,       // ghost must be this close to a prop to haunt it
-  PROX_RADIUS: 10,        // a hunter within this of the prop => points (doc's proximity rule)
-  HAUNT_CD: 1.4,          // seconds between haunts
-
-  PHASE_COST: 5,          // meter drained per wall-phase, ONLY while charged (doc)
-  PHASE_RESIDUE_S: 45,    // residue visibility (doc says 30-60s, [OPEN])
-  PHASE_CD: 0.6,
-
-  HURL_COST: 10,
-  HURL_RANGE: 12,
-  STAGGER_S: 1.6,         // stagger interrupts ritual channel + tool reading
-
-  CLUTTER_COST: 15,
-  CLUTTER_RANGE: 7,       // nearest doorway within this of the ghost
-  BARRICADE_S: 25,        // barricade lifetime if not cleared
-
-  CRUSH_COST: 35,         // "dumps a big chunk of meter" (doc)
-  CRUSH_RANGE: 14,
-  CRUSH_ISO_RADIUS: 7,    // target is "isolated": no living teammate within this
-  CRUSH_MAX_SPEED: 1.7,   // target is "relatively stationary"
-  CRUSH_TELE_S: 1.6,      // "a beat to move or break line of sight" (doc, [OPEN])
-  CRUSH_KILL_RADIUS: 1.5,
-
-  RAMPAGE_BLIND_S: 5,     // ghost blind period on manifest (doc: ~5s)
-  RAMPAGE_DUR_S: 32,
-  GRAB_RANGE: 1.9,
-  DRAG_EXEC_S: 6,         // drag this long uninterrupted => execution (doc)
-  RESCUE_RANGE: 2.8,      // teammate intervention range
-  GRAB_CD: 3,             // after a rescue breaks the grab
-  RESCUE_STUN_S: 3,
-
-  EVIDENCE_TTL: 45,       // EMF trace lifetime
-  COLD_RATE: 1.8,         // deg/s the ghost's current room cools
-  COLD_DECAY: 0.25,       // deg/s rooms warm back up
-  TEMP_BASE: 18,
-  TEMP_MIN: 1,
-
-  RITUAL_COMPONENTS: 3,
-  CHANNEL_S: 12,          // total channel time to banish
-  CHANNEL_RANGE: 2.4,
-
-  MIN_PLAYERS: 2,
-  MAX_HUNTERS: 3,
-};
+export { TUNE };
 
 const now = () => Date.now() / 1000;
 const dist2 = (ax, az, bx, bz) => (ax - bx) ** 2 + (az - bz) ** 2;
@@ -96,6 +43,9 @@ export class Game {
     this.grabCdUntil = 0;
     this.hauntCdUntil = 0;
     this.phaseCdUntil = 0;
+    this.lockUntil = 0;        // disruptor: ghost abilities locked until this
+    this.trailUntil = 0;       // disruptor: ghost drops visible trail markers until this
+    this.nextTrailAt = 0;
     this.winner = null;
   }
 
@@ -105,9 +55,10 @@ export class Game {
     const p = {
       id, name: String(name).slice(0, 16) || 'Player', ws,
       role: null, alive: true,
-      x: 0, y: 1.6, z: 0, ry: 0, sp: 0,
+      x: 0, y: 1.6, z: 0, ry: 0, sp: 0, fl: false, emfOn: false,
       speedAvg: 0, staggerUntil: 0, stunUntil: 0,
       carrying: null, dragged: false,
+      disruptCdUntil: 0, wardReadyAt: 0, clueT: 0,
     };
     this.players.set(id, p);
     if (!this.hostId) this.hostId = id;
@@ -167,13 +118,24 @@ export class Game {
     this.state = 'playing';
     this.startT = now();
 
-    // spawn ritual components at 3 random candidate spots
-    const spots = [...componentSpots].sort(() => Math.random() - 0.5).slice(0, TUNE.RITUAL_COMPONENTS);
-    this.components = spots.map((s, i) => ({ id: 'comp' + i, x: s.x, z: s.z, state: 'world', carrier: null }));
+    // spawn ritual objects at random candidate spots — only RITUAL_REAL of them
+    // are genuine, and which ones is a secret the hunters must deduce
+    const spots = [...componentSpots].sort(() => Math.random() - 0.5).slice(0, TUNE.RITUAL_OBJECTS);
+    const realIdx = new Set(
+      Array.from({ length: TUNE.RITUAL_OBJECTS }, (_, i) => i)
+        .sort(() => Math.random() - 0.5).slice(0, TUNE.RITUAL_REAL)
+    );
+    this.components = spots.map((s, i) => ({
+      id: 'comp' + i, x: s.x, z: s.z, state: 'world', carrier: null,
+      real: realIdx.has(i), revealed: false,
+    }));
 
     hunters.forEach((h, i) => {
       const s = hunterSpawns[i % hunterSpawns.length];
-      Object.assign(h, { x: s.x, z: s.z, y: 1.6, alive: true, carrying: null, dragged: false, staggerUntil: 0 });
+      Object.assign(h, {
+        x: s.x, z: s.z, y: 1.6, alive: true, carrying: null, dragged: false,
+        staggerUntil: 0, disruptCdUntil: 0, wardReadyAt: 0, fl: false, emfOn: false, clueT: 0,
+      });
     });
     Object.assign(ghost, { x: ghostSpawn.x, z: ghostSpawn.z, y: 1.6, alive: true });
 
@@ -210,6 +172,8 @@ export class Game {
       case 'pos': {
         if (this.state !== 'playing' || !p.alive || p.dragged) return;
         p.x = +m.x || 0; p.y = +m.y || 1.6; p.z = +m.z || 0; p.ry = +m.ry || 0;
+        p.fl = !!m.fl;
+        p.emfOn = !!m.tl;
         const sp = Math.min(+m.sp || 0, 12);
         p.speedAvg = p.speedAvg * 0.8 + sp * 0.2;
         return;
@@ -222,17 +186,34 @@ export class Game {
   action(p, m) {
     if (p.role !== 'ghost' || !p.alive) return;
     const t = now();
+    // disruptor lock: all abilities are dead until it wears off (phasing is
+    // movement, not an ability — it stays, and still leaves residue).
+    if (t < this.lockUntil && m.kind !== 'phase') {
+      return this.sendTo(p.id, { t: 'toast', msg: 'DISRUPTED — your powers are locked.' });
+    }
     switch (m.kind) {
       case 'haunt': {
         if (t < this.hauntCdUntil) return;
         const prop = props.find(pr => pr.id === m.propId);
         if (!prop || dist2(p.x, p.z, prop.x, prop.z) > TUNE.HAUNT_RANGE ** 2) return;
+        // interactions scale with the meter: heavy furniture needs power
+        if (prop.heavy && this.meter < TUNE.HEAVY_HAUNT_AT) {
+          return this.sendTo(p.id, { t: 'toast', msg: `The ${prop.name} is too heavy — you need ${TUNE.HEAVY_HAUNT_AT} power.` });
+        }
         this.hauntCdUntil = t + TUNE.HAUNT_CD;
         // proximity rule: points only if a living hunter is near the prop
         const near = this.livingHunters().some(h => dist2(h.x, h.z, prop.x, prop.z) < TUNE.PROX_RADIUS ** 2);
-        if (near) this.meter = Math.min(TUNE.METER_MAX, this.meter + TUNE.HAUNT_GAIN);
-        this.addEvidence(prop.x, prop.z, 5);
-        this.broadcast({ t: 'ev', ev: 'haunt', propId: prop.id, scored: near, room: prop.room });
+        // a flashlight beam held on the ghost suppresses charging
+        const lit = this.ghostLit(p);
+        let gain = 0;
+        if (near) {
+          gain = prop.heavy ? TUNE.HAUNT_GAIN_HEAVY : TUNE.HAUNT_GAIN;
+          if (lit) gain *= TUNE.FLASH_SLOW_FACTOR;
+          gain = +gain.toFixed(1);
+          this.meter = Math.min(TUNE.METER_MAX, this.meter + gain);
+        }
+        this.addEvidence(prop.x, prop.z, prop.heavy ? 5 : 4);
+        this.broadcast({ t: 'ev', ev: 'haunt', propId: prop.id, scored: near, gain, lit, heavy: !!prop.heavy, room: prop.room });
         return;
       }
       case 'phase': {
@@ -337,14 +318,23 @@ export class Game {
         if (dist2(p.x, p.z, ritualCircle.x, ritualCircle.z) > (ritualCircle.r + 1.2) ** 2) return;
         const c = this.components.find(c => c.id === p.carrying);
         if (!c) { p.carrying = null; return; }
-        c.state = 'placed'; c.carrier = null; p.carrying = null;
-        const placed = this.components.filter(c => c.state === 'placed').length;
-        this.broadcast({ t: 'ev', ev: 'placed', id: c.id, placed, total: this.components.length });
+        c.carrier = null; p.carrying = null;
+        if (c.real) {
+          c.state = 'placed';
+          const placed = this.realPlaced();
+          this.broadcast({ t: 'ev', ev: 'placed', id: c.id, placed, total: TUNE.RITUAL_REAL });
+        } else {
+          // identification puzzle penalty: a FALSE object shatters and dumps
+          // a burst of power into the ghost's meter
+          c.state = 'destroyed'; c.revealed = true;
+          this.meter = Math.min(TUNE.METER_MAX, this.meter + TUNE.WRONG_OBJECT_METER);
+          this.addEvidence(ritualCircle.x, ritualCircle.z, 5);
+          this.broadcast({ t: 'ev', ev: 'wrongObject', id: c.id, by: p.id, gain: TUNE.WRONG_OBJECT_METER });
+        }
         return;
       }
       case 'chanStart': {
-        const allPlaced = this.components.every(c => c.state === 'placed');
-        if (!allPlaced) return;
+        if (this.realPlaced() < TUNE.RITUAL_REAL) return;
         if (dist2(p.x, p.z, ritualCircle.x, ritualCircle.z) > TUNE.CHANNEL_RANGE ** 2) return;
         this.channelers.add(p.id);
         return;
@@ -354,16 +344,45 @@ export class Game {
         return;
       }
       case 'rescue': {
+        // breaking a drag-kill burns the rescuer's ward (defensive item, long recharge)
         if (!this.drag) return;
         const victim = this.players.get(this.drag.targetId);
         if (!victim || victim.id === p.id) return;
         if (dist2(p.x, p.z, victim.x, victim.z) > TUNE.RESCUE_RANGE ** 2) return;
+        if (t < p.wardReadyAt) return this.sendTo(p.id, { t: 'toast', msg: 'Your ward is still recharging — you cannot break the grip.' });
+        p.wardReadyAt = t + TUNE.WARD_RECHARGE_S;
         this.drag = null;
         victim.dragged = false;
         this.grabCdUntil = t + TUNE.GRAB_CD;
         const ghost = this.ghost();
         if (ghost) ghost.stunUntil = t + TUNE.RESCUE_STUN_S;
         this.broadcast({ t: 'ev', ev: 'rescue', targetId: victim.id, by: p.id });
+        return;
+      }
+      case 'disrupt': {
+        // THE key hunter tool: aim roughly at the (invisible) ghost and fire.
+        // Hit => trail revealed, 10% meter drained, all ghost abilities locked.
+        // Fires on a long cooldown whether it hits or not — a real commitment.
+        if (t < p.disruptCdUntil) return;
+        const ghost = this.ghost();
+        if (!ghost || !ghost.alive) return;
+        p.disruptCdUntil = t + TUNE.DISRUPT_CD_S;
+        const dx = ghost.x - p.x, dz = ghost.z - p.z;
+        const d = Math.sqrt(dx * dx + dz * dz);
+        const fx = -Math.sin(p.ry), fz = -Math.cos(p.ry); // hunter's facing (matches client camera)
+        const cos = d > 0.001 ? (dx * fx + dz * fz) / d : 1;
+        const ang = Math.acos(Math.max(-1, Math.min(1, cos))) * 180 / Math.PI;
+        const hit = d <= TUNE.DISRUPT_RANGE && ang <= TUNE.DISRUPT_AIM_DEG;
+        if (hit) {
+          this.meter = Math.max(0, this.meter - TUNE.METER_MAX * TUNE.DISRUPT_DRAIN_FRAC);
+          this.lockUntil = t + TUNE.DISRUPT_LOCK_S;
+          this.trailUntil = t + TUNE.DISRUPT_TRAIL_S;
+          this.nextTrailAt = t;
+          this.addEvidence(ghost.x, ghost.z, 5);
+          this.broadcast({ t: 'ev', ev: 'disrupted', by: p.id, lock: TUNE.DISRUPT_LOCK_S, x: p.x, z: p.z, ry: p.ry });
+        } else {
+          this.broadcast({ t: 'ev', ev: 'disruptMiss', by: p.id, x: p.x, z: p.z, ry: p.ry });
+        }
         return;
       }
       case 'clear': {
@@ -434,6 +453,26 @@ export class Game {
       }
     }
 
+    // identification clue: a hunter holding the tracker (EMF on) with the ghost
+    // in range accumulates a lock; CLUE_LOCK_S sustained seconds => a clue.
+    // Breaking the signal resets the lock. Staggers count as broken.
+    if (ghost && ghost.alive) {
+      for (const h of this.livingHunters()) {
+        const locked = h.emfOn && t >= h.staggerUntil && !h.dragged &&
+          dist2(h.x, h.z, ghost.x, ghost.z) <= TUNE.CLUE_RANGE ** 2;
+        if (locked) {
+          h.clueT += dt;
+          if (h.clueT >= TUNE.CLUE_LOCK_S) { h.clueT = 0; this.giveClue(h); }
+        } else h.clueT = 0;
+      }
+    }
+
+    // disruptor trail: while revealed, the ghost drops visible markers as it moves
+    if (ghost && ghost.alive && t < this.trailUntil && t >= this.nextTrailAt) {
+      this.nextTrailAt = t + TUNE.DISRUPT_TRAIL_STEP_S;
+      this.broadcast({ t: 'ev', ev: 'trail', x: +ghost.x.toFixed(2), z: +ghost.z.toFixed(2) });
+    }
+
     // rampage timer — meter is spent when the window closes
     if (this.rampage && t >= this.rampage.endT) {
       this.rampage = null;
@@ -457,7 +496,10 @@ export class Game {
         }
       }
       if (this.channelers.size > 0) {
-        this.ritualProgress = Math.min(TUNE.CHANNEL_S, this.ritualProgress + dt);
+        // more channelers = faster ritual; one hunter alone can still (slowly) finish
+        const rates = TUNE.RITUAL_RATE_BY_CHANNELERS;
+        const rate = rates[Math.min(this.channelers.size, rates.length - 1)];
+        this.ritualProgress = Math.min(TUNE.CHANNEL_S, this.ritualProgress + rate * dt);
         if (this.ritualProgress >= TUNE.CHANNEL_S) return this.end('hunters', 'The banish ritual is complete.');
       }
     }
@@ -494,6 +536,46 @@ export class Game {
 
   ghost() { return [...this.players.values()].find(p => p.role === 'ghost'); }
   livingHunters() { return [...this.players.values()].filter(p => p.role === 'hunter' && p.alive); }
+
+  // is any living hunter holding a lit flashlight beam on the ghost?
+  ghostLit(ghost) {
+    for (const h of this.livingHunters()) {
+      if (!h.fl) continue;
+      const dx = ghost.x - h.x, dz = ghost.z - h.z;
+      const d = Math.sqrt(dx * dx + dz * dz);
+      if (d > TUNE.FLASH_SLOW_RANGE || d < 0.001) continue;
+      const fx = -Math.sin(h.ry), fz = -Math.cos(h.ry);
+      const cos = (dx * fx + dz * fz) / d;
+      if (Math.acos(Math.max(-1, Math.min(1, cos))) * 180 / Math.PI <= TUNE.FLASH_SLOW_DEG) return true;
+    }
+    return false;
+  }
+
+  realPlaced() { return this.components.filter(c => c.real && c.state === 'placed').length; }
+
+  // a successful tracker lock identifies CLUE_REVEALS random unidentified
+  // objects as TRUE or FALSE — team-wide knowledge
+  giveClue(h) {
+    const pool = this.components.filter(c => !c.revealed);
+    if (!pool.length) return this.sendTo(h.id, { t: 'toast', msg: 'The tracker finds nothing more to learn.' });
+    for (let i = 0; i < TUNE.CLUE_REVEALS && pool.length; i++) {
+      const c = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+      c.revealed = true;
+      this.broadcast({
+        t: 'ev', ev: 'clue', id: c.id, known: c.real ? 'real' : 'fake',
+        room: roomAt(c.x, c.z)?.name || 'somewhere', by: h.id,
+      });
+    }
+  }
+
+  // tracker readout: the area of the latest ghost activity + coarse charge (0-4)
+  trackInfo() {
+    const latest = this.evidence[this.evidence.length - 1];
+    return {
+      room: latest ? (roomAt(latest.x, latest.z)?.name || null) : null,
+      charge: Math.min(4, Math.floor(this.meter / (TUNE.METER_MAX / 4))),
+    };
+  }
 
   addEvidence(x, z, strength) {
     this.evidence.push({ id: nextEvId++, x, z, strength, t: now() });
@@ -538,19 +620,26 @@ export class Game {
     const temps = {};
     for (const r of rooms) temps[r.id] = +(TUNE.TEMP_BASE - this.cold[r.id]).toFixed(1);
     const ritual = {
-      placed: this.components.filter(c => c.state === 'placed').length,
-      total: this.components.length,
+      placed: this.realPlaced(),
+      total: TUNE.RITUAL_REAL,
+      identified: this.components.filter(c => c.revealed).length,
+      objects: TUNE.RITUAL_OBJECTS,
       progress: +this.ritualProgress.toFixed(2),
       channelS: TUNE.CHANNEL_S,
       channeling: this.channelers.size,
     };
-    const comps = this.components.map(c => ({ id: c.id, x: c.x, z: c.z, state: c.state, carrier: c.carrier }));
+    // `real` is never sent unless revealed — the truth stays server-side
+    const comps = this.components.map(c => ({
+      id: c.id, x: c.x, z: c.z, state: c.state, carrier: c.carrier,
+      known: c.revealed ? (c.real ? 'real' : 'fake') : null,
+    }));
     const barr = this.barricades.map(b => ({ id: b.id, x: b.x, z: b.z, axis: b.axis }));
     const ghostVisible = !!(this.rampage || this.drag);
     const ghostPub = ghost && ghostVisible ? {
       x: +ghost.x.toFixed(2), y: +ghost.y.toFixed(2), z: +ghost.z.toFixed(2), ry: +ghost.ry.toFixed(2),
     } : null;
 
+    const track = this.trackInfo();
     for (const p of this.players.values()) {
       if (p.role === 'hunter') {
         const dread = ghost && ghost.alive
@@ -559,13 +648,21 @@ export class Game {
         this.sendTo(p.id, {
           t: 'st', hunters: huntersPub, ghost: ghostPub,
           emf: this.emfFor(p), dread: +dread.toFixed(2), temps, ritual,
-          comps, barr,
+          comps, barr, track,
+          disruptCd: +Math.max(0, p.disruptCdUntil - t).toFixed(1),
+          ward: +Math.max(0, p.wardReadyAt - t).toFixed(1),
+          clue: +Math.min(1, p.clueT / TUNE.CLUE_LOCK_S).toFixed(2),
           rampage: !!this.rampage,
         });
       } else {
         this.sendTo(p.id, {
           t: 'st', hunters: huntersPub,
-          ghostSelf: { meter: +this.meter.toFixed(1), stunned: t < p.stunUntil },
+          ghostSelf: {
+            meter: +this.meter.toFixed(1),
+            stunned: t < p.stunUntil,
+            lock: +Math.max(0, this.lockUntil - t).toFixed(1),
+            lit: ghost && ghost.alive ? this.ghostLit(ghost) : false,
+          },
           temps, ritual, comps, barr,
           rampage: !!this.rampage,
           blind: this.rampage ? Math.max(0, this.rampage.blindUntil - t) : 0,

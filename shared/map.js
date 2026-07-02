@@ -143,7 +143,8 @@ export function propBox(p) {
 // The generic banish ritual: place all components at the circle, then channel.
 export const ritualCircle = { x: 20.5, z: 12.5, r: 1.3, room: 'study' };
 
-// Candidate spawn points for ritual components; the server picks 3 at random.
+// Candidate spawn points for ritual objects; the server picks RITUAL_OBJECTS
+// (6) at random and secretly marks RITUAL_REAL (3) of them genuine.
 export const componentSpots = [
   { x: 5.8,  z: 3.6 },   // bedroom1
   { x: 8,    z: 4.8 },   // bathroom

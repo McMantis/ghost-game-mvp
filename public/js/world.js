@@ -187,6 +187,15 @@ export function makeComponentMesh() {
   return grp;
 }
 
+// identification puzzle: recolor a ritual object's flame + glow once the
+// tracker has identified it. null = unknown (amber), 'real' green, 'fake' red.
+export function setComponentKnown(grp, known) {
+  const flameColor = known === 'real' ? 0x50ff90 : known === 'fake' ? 0xff4050 : 0xffc040;
+  const lightColor = known === 'real' ? 0x30ff70 : known === 'fake' ? 0xff2040 : 0xffa030;
+  grp.children[1].material.color.setHex(flameColor); // flame
+  grp.children[2].color.setHex(lightColor);          // point light
+}
+
 export function makeResidueMesh(x, y, z, nx, nz) {
   const m = new THREE.Mesh(
     new THREE.CircleGeometry(0.45, 14),
@@ -194,6 +203,17 @@ export function makeResidueMesh(x, y, z, nx, nz) {
   );
   m.position.set(x + nx * (WALL_T / 2 + 0.02), y, z + nz * (WALL_T / 2 + 0.02));
   m.lookAt(x + nx * 2, y, z + nz * 2);
+  return m;
+}
+
+// disruptor-revealed ghost trail: glowing floor marker that fades out
+export function makeTrailMesh(x, z) {
+  const m = new THREE.Mesh(
+    new THREE.CircleGeometry(0.35, 12),
+    new THREE.MeshBasicMaterial({ color: 0xffa030, transparent: true, opacity: 0.8, side: THREE.DoubleSide })
+  );
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(x, 0.04, z);
   return m;
 }
 

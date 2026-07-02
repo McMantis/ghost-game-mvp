@@ -55,7 +55,7 @@
   <div id="ghostHud" class="hidden">
     <div id="meterWrap">
       <div id="meterLabel">MANIFESTATION</div>
-      <div id="meterBar"><div id="meterFill"></div><div id="meterTick"></div></div>
+      <div id="meterBar"><div id="meterFill"></div><div id="meterTick"></div><div id="meterTick2"></div></div>
       <div id="proxNote"></div>
     </div>
     <div id="abilities">
@@ -72,11 +72,18 @@
     <div id="tools">
       <div class="tool" id="toolEmf"><b>1</b> EMF <span class="bat"><span id="batEmf"></span></span>
         <div id="emfLights"><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="toolRead" id="trackRead">--</div>
       </div>
       <div class="tool" id="toolThermo"><b>2</b> THERMO <span class="bat"><span id="batThermo"></span></span>
         <div id="thermoRead">--</div>
       </div>
       <div class="tool" id="toolFlash"><b>F</b> LIGHT <span class="bat"><span id="batFlash"></span></span></div>
+      <div class="tool" id="toolDisrupt"><b>Q</b> DISRUPT
+        <div class="toolRead" id="disruptRead">READY</div>
+      </div>
+      <div class="tool" id="toolWard">WARD <small>(auto on rescue)</small>
+        <div class="toolRead" id="wardRead">READY</div>
+      </div>
     </div>
     <div id="ritualHud">RITUAL: <span id="ritualState"></span></div>
     <div id="carryHud" class="hidden">CARRYING: RITUAL COMPONENT</div>
@@ -90,6 +97,7 @@
 <div id="clickToPlay" class="hidden"><div><h3>CLICK TO TAKE CONTROL</h3><p>WASD — move &nbsp;·&nbsp; mouse — look &nbsp;·&nbsp; ESC — release mouse</p></div></div>
 <div id="blind" class="hidden"><span>YOU MANIFEST — BLIND</span></div>
 <div id="staggerFlash" class="hidden"></div>
+<div id="wrongFlash" class="hidden"><span>THE GHOST FEEDS ON YOUR MISTAKE</span></div>
 <div id="dragOverlay" class="hidden"><span>YOU ARE BEING DRAGGED — SCREAM FOR HELP</span></div>
 <div id="jumpscare" class="hidden">
   <svg viewBox="0 0 200 200">

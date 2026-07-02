@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import {
   initRenderer, buildHouse, makeHunterMesh, makeGhostMesh, makeComponentMesh,
   makeResidueMesh, makeBarricadeMesh, makeCrushMesh, makeHurlMesh, makeBodyMesh,
+  makeTrailMesh, setComponentKnown,
   walls, props, HOUSE, ritualCircle,
 } from './world.js';
 import { roomAt } from '/shared/map.js';
@@ -182,6 +183,10 @@ export class Match {
       if (code === 'KeyF') this.flashOn = !this.flashOn && this.bat.flash > 0;
       if (code === 'Digit1') this.tool = this.tool === 'emf' ? null : (this.bat.emf > 0 ? 'emf' : this.tool);
       if (code === 'Digit2') this.tool = this.tool === 'thermo' ? null : (this.bat.thermo > 0 ? 'thermo' : this.tool);
+      if (code === 'KeyQ') {
+        if ((this.state?.disruptCd || 0) > 0) this.msg(`Disruptor recharging — ${Math.ceil(this.state.disruptCd)}s`);
+        else this.net.send({ t: 'int', kind: 'disrupt' });
+      }
       if (code === 'KeyE') this.pressE();
     } else {
       if (code === 'KeyE') this.ghostE();
@@ -217,7 +222,7 @@ export class Match {
       const h = this.nearestHunter(this.tune.GRAB_RANGE);
       if (h) return this.net.send({ t: 'act', kind: 'grab', targetId: h.id });
     }
-    const pr = this.nearestProp(this.tune.HAUNT_RANGE);
+    const pr = this.usableProp(this.tune.HAUNT_RANGE) || this.nearestProp(this.tune.HAUNT_RANGE);
     if (pr) this.net.send({ t: 'act', kind: 'haunt', propId: pr.id });
   }
 
@@ -268,6 +273,18 @@ export class Match {
     return best;
   }
 
+  // nearest prop the ghost is currently strong enough to haunt
+  usableProp(range) {
+    const meter = this.state?.ghostSelf?.meter ?? 0;
+    let best = null, bd = range * range;
+    for (const p of props) {
+      if (p.heavy && meter < this.tune.HEAVY_HAUNT_AT) continue;
+      const d = (p.x - this.pos.x) ** 2 + (p.z - this.pos.z) ** 2;
+      if (d < bd) { bd = d; best = p; }
+    }
+    return best;
+  }
+
   interactContext() {
     const st = this.state;
     if (!st || this.dead || this.dragged) return null;
@@ -280,8 +297,12 @@ export class Match {
     if (!this.carrying) {
       for (const c of st.comps) {
         if (c.state !== 'world') continue;
-        if (Math.hypot(c.x - this.pos.x, c.z - this.pos.z) < 2.0)
-          return { kind: 'pickup', id: c.id, label: '<b>E</b> — Take ritual component' };
+        if (Math.hypot(c.x - this.pos.x, c.z - this.pos.z) < 2.0) {
+          const tag = c.known === 'real' ? ' (TRUE)'
+            : c.known === 'fake' ? ' (FALSE — it will empower the ghost!)'
+            : ' (unverified)';
+          return { kind: 'pickup', id: c.id, label: '<b>E</b> — Take ritual object' + tag };
+        }
       }
     }
     const dCircle = Math.hypot(ritualCircle.x - this.pos.x, ritualCircle.z - this.pos.z);
@@ -320,6 +341,8 @@ export class Match {
         t: 'pos',
         x: +this.pos.x.toFixed(2), y: +this.pos.y.toFixed(2), z: +this.pos.z.toFixed(2),
         ry: +this.yaw.toFixed(2), sp: +this.speedNow.toFixed(2),
+        fl: this.role === 'hunter' && this.flashOn && this.bat.flash > 0 && !this.dead ? 1 : 0,
+        tl: this.role === 'hunter' && this.tool === 'emf' && this.bat.emf > 0 && !this.dead ? 1 : 0,
       });
     }
 
@@ -470,16 +493,17 @@ export class Match {
 
   drainBatteries(dt) {
     if (this.dead) return;
+    const T = this.tune;
     if (this.flashOn) {
-      this.bat.flash = Math.max(0, this.bat.flash - dt * (100 / 240));
+      this.bat.flash = Math.max(0, this.bat.flash - dt * (100 / T.FLASH_BATT_S));
       if (this.bat.flash === 0) this.flashOn = false;
     }
     if (this.tool === 'emf') {
-      this.bat.emf = Math.max(0, this.bat.emf - dt * (100 / 90));
+      this.bat.emf = Math.max(0, this.bat.emf - dt * (100 / T.EMF_BATT_S));
       if (this.bat.emf === 0) this.tool = null;
     }
     if (this.tool === 'thermo') {
-      this.bat.thermo = Math.max(0, this.bat.thermo - dt * (100 / 90));
+      this.bat.thermo = Math.max(0, this.bat.thermo - dt * (100 / T.THERMO_BATT_S));
       if (this.bat.thermo === 0) this.tool = null;
     }
   }
@@ -518,6 +542,8 @@ export class Match {
     for (const c of st.comps) {
       const m = this.compMeshes.get(c.id);
       if (!m) continue;
+      if (m.userData.known !== c.known) { setComponentKnown(m, c.known); m.userData.known = c.known; }
+      if (c.state === 'destroyed') { m.visible = false; continue; }
       if (c.state === 'world') { m.visible = true; m.position.set(c.x, 0, c.z); }
       else if (c.state === 'carried') m.visible = false;
       else { // placed — arrange around the circle
@@ -547,7 +573,10 @@ export class Match {
         const p = props.find(p => p.id === m.propId);
         if (p) sfx.knock(dist(p.x, p.z));
         this.flickerRoom(m.room);
-        if (this.role === 'ghost') this.msg(m.scored ? 'Haunt +' + this.tune.HAUNT_GAIN + ' (hunter nearby)' : 'No charge — no hunter nearby');
+        if (this.role === 'ghost') {
+          if (!m.scored) this.msg('No charge — no hunter nearby');
+          else this.msg(m.lit ? `Haunt +${m.gain} — a flashlight suppresses you!` : `Haunt +${m.gain} (hunter nearby)`);
+        }
         return;
       }
       case 'residue': {
@@ -670,7 +699,40 @@ export class Match {
       case 'rescue': {
         sfx.thud(0);
         if (m.targetId === this.myId) this.msg('You were torn free!');
+        else if (m.by === this.myId) this.msg('Rescue! Your ward shatters — it must recharge.');
         else this.msg('Rescue! The ghost recoils.');
+        return;
+      }
+      case 'disrupted': {
+        sfx.zap(dist(m.x, m.z));
+        if (this.role === 'ghost') {
+          this.shake = Math.max(this.shake, 0.3);
+          const f = $('staggerFlash');
+          f.classList.remove('hidden');
+          void f.offsetWidth;
+          setTimeout(() => f.classList.add('hidden'), 500);
+          this.msg(`DISRUPTED — powers locked for ${m.lock}s, your trail is exposed!`);
+        } else {
+          this.msg(m.by === this.myId ? 'DIRECT HIT — its trail is exposed and its powers are locked!' : 'A disruptor hit! Follow the trail!');
+        }
+        return;
+      }
+      case 'disruptMiss': {
+        sfx.zap(dist(m.x, m.z));
+        if (this.role === 'ghost') this.msg('A disruptor fires wide of you.');
+        else this.msg(m.by === this.myId ? 'The disruptor crackles into empty air…' : 'A disruptor missed.');
+        return;
+      }
+      case 'trail': {
+        const tm = makeTrailMesh(m.x, m.z);
+        this.scene.add(tm);
+        const ttl = 6;
+        let age = 0;
+        this.anims.push(dt => {
+          age += dt;
+          tm.material.opacity = 0.8 * (1 - age / ttl);
+          if (age >= ttl) { this.scene.remove(tm); return false; }
+        });
         return;
       }
       case 'death': {
@@ -689,12 +751,32 @@ export class Match {
       }
       case 'pickup': {
         sfx.chime();
-        if (m.by === this.myId) this.msg('Component taken — bring it to the ritual circle.');
+        if (m.by === this.myId) this.msg('Object taken — bring it to the ritual circle. Is it TRUE?');
         return;
       }
       case 'placed': {
         sfx.chime();
-        this.msg(`Ritual component placed (${m.placed}/${m.total}).`);
+        this.msg(`TRUE ritual object placed (${m.placed}/${m.total}).`);
+        return;
+      }
+      case 'clue': {
+        sfx.chime();
+        if (this.role === 'ghost') this.msg('The tracker locked onto you — they identified an object.');
+        else this.msg(`Tracker lock: the ritual object in the ${m.room} is ${m.known === 'real' ? 'TRUE' : 'FALSE'}.`);
+        return;
+      }
+      case 'wrongObject': {
+        sfx.backfire();
+        this.shake = Math.max(this.shake, 0.5);
+        this.flickerRoom(ritualCircle.room);
+        const f = $('wrongFlash');
+        f.classList.remove('hidden');
+        void f.offsetWidth;
+        setTimeout(() => f.classList.add('hidden'), 1000);
+        if (this.role === 'ghost') this.msg(`+${m.gain} power — they used a FALSE object!`);
+        else this.msg(m.by === this.myId
+          ? `WRONG OBJECT — it shatters and the ghost surges with power (+${m.gain})!`
+          : 'A FALSE object was used — the ghost surges with power!');
         return;
       }
     }
@@ -763,15 +845,24 @@ export class Match {
     if (this.role === 'ghost') {
       $('ghostHud').classList.remove('hidden');
       $('hunterHud').classList.add('hidden');
+      $('meterTick').style.left = `${this.tune.LESSER_AT}%`;
+      $('meterTick2').style.left = `${this.tune.HEAVY_HAUNT_AT}%`;
       $('objective').innerHTML = 'You are the <b>POLTERGEIST</b>. Haunt objects <i>near</i> hunters to charge your meter. Kill them all before they finish the ritual.';
       $('helpPanel').textContent =
-        'WASD — float (you pass through walls; phasing leaves residue and drains meter once charged)\nE — haunt nearby object / GRAB during Rampage\nQ — Hurl (stagger a hunter)\nC — Clutter (barricade nearest doorway)\nX — Crush (isolated, still target)\nR — RAMPAGE (full meter)\nH — toggle help';
+        'WASD — float (you pass through walls; phasing leaves residue and drains meter once charged)\n' +
+        `E — haunt nearby object (heavy furniture needs ${this.tune.HEAVY_HAUNT_AT} power) / GRAB during Rampage\n` +
+        'Q — Hurl (stagger a hunter)\nC — Clutter (barricade nearest doorway)\nX — Crush (isolated, still target)\nR — RAMPAGE (full meter)\n' +
+        'Beware: flashlights held on you suppress charging; disruptors lock your powers\nH — toggle help';
     } else {
       $('hunterHud').classList.remove('hidden');
       $('ghostHud').classList.add('hidden');
-      $('objective').innerHTML = 'Find the <b>3 ritual components</b>, place them on the glowing circle in the Study, and channel the banish ritual. Your tools track the ghost. Stay together — it kills stragglers.';
+      $('objective').innerHTML = `<b>${this.tune.RITUAL_OBJECTS} ritual objects</b> are hidden — only <b>${this.tune.RITUAL_REAL} are TRUE</b>. Hold a tracker lock near the ghost (${this.tune.CLUE_LOCK_S}s) to identify them. Place the TRUE ones on the circle in the Study and channel — more channelers, faster ritual. A FALSE object <b>feeds the ghost</b>.`;
       $('helpPanel').textContent =
-        'WASD — move, SHIFT — sprint\nMouse — look\nE — interact (pick up / place / channel / rescue)\n1 — EMF reader   2 — Thermometer\nF — flashlight (batteries are limited!)\nH — toggle help';
+        'WASD — move, SHIFT — sprint\nMouse — look\nE — interact (pick up / place / channel / rescue a dragged teammate — rescuing spends your WARD)\n' +
+        `1 — EMF tracker (proximity + active area + ghost power; hold a strong signal ${this.tune.CLUE_LOCK_S}s near the ghost to identify a ritual object)   2 — Thermometer\n` +
+        'F — flashlight (hold the beam on the ghost to slow its charging; batteries are limited!)\n' +
+        `Q — DISRUPTOR: aim at the ghost and fire. Hit = trail revealed, power drained, abilities locked ${this.tune.DISRUPT_LOCK_S}s. Long cooldown!\n` +
+        'H — toggle help';
     }
   }
 
@@ -787,10 +878,16 @@ export class Match {
         const ctx = this.interactContext();
         if (ctx) promptText = ctx.label;
       } else if (!this.blind()) {
-        if (st?.rampage && this.nearestHunter(this.tune.GRAB_RANGE)) promptText = '<b>E</b> — GRAB';
+        const lock = st?.ghostSelf?.lock || 0;
+        if (lock > 0) promptText = `⚡ DISRUPTED — powers return in ${Math.ceil(lock)}s`;
+        else if (st?.rampage && this.nearestHunter(this.tune.GRAB_RANGE)) promptText = '<b>E</b> — GRAB';
         else {
-          const pr = this.nearestProp(this.tune.HAUNT_RANGE);
+          const pr = this.usableProp(this.tune.HAUNT_RANGE);
           if (pr) promptText = `<b>E</b> — Haunt the ${pr.name}`;
+          else {
+            const any = this.nearestProp(this.tune.HAUNT_RANGE);
+            if (any) promptText = `The ${any.name} is too heavy — needs ${this.tune.HEAVY_HAUNT_AT} power`;
+          }
         }
       }
     }
@@ -805,17 +902,21 @@ export class Match {
 
     if (this.role === 'ghost') {
       const meter = st.ghostSelf?.meter ?? 0;
+      const locked = (st.ghostSelf?.lock || 0) > 0;
       $('meterFill').style.width = `${meter}%`;
       const near = this.nearestHunter(this.tune.PROX_RADIUS);
       const pn = $('proxNote');
-      pn.textContent = near ? 'A hunter is close — haunts will charge you' : 'No hunters nearby — haunts earn nothing';
-      pn.classList.toggle('on', !!near);
+      if (st.ghostSelf?.lit) { pn.textContent = 'A flashlight pins you — charging suppressed'; pn.classList.remove('on'); }
+      else {
+        pn.textContent = near ? 'A hunter is close — haunts will charge you' : 'No hunters nearby — haunts earn nothing';
+        pn.classList.toggle('on', !!near);
+      }
       const T = this.tune;
-      this.abState('abHaunt', true, false);
-      this.abState('abHurl', meter >= T.LESSER_AT && meter >= T.HURL_COST, meter < T.LESSER_AT);
-      this.abState('abClutter', meter >= T.LESSER_AT && meter >= T.CLUTTER_COST, meter < T.LESSER_AT);
-      this.abState('abCrush', meter >= T.CRUSH_COST, meter < T.CRUSH_COST);
-      this.abState('abRampage', meter >= T.METER_MAX, meter < T.METER_MAX);
+      this.abState('abHaunt', !locked, locked);
+      this.abState('abHurl', !locked && meter >= T.LESSER_AT && meter >= T.HURL_COST, locked || meter < T.LESSER_AT);
+      this.abState('abClutter', !locked && meter >= T.LESSER_AT && meter >= T.CLUTTER_COST, locked || meter < T.LESSER_AT);
+      this.abState('abCrush', !locked && meter >= T.CRUSH_COST, locked || meter < T.CRUSH_COST);
+      this.abState('abRampage', !locked && meter >= T.METER_MAX, locked || meter < T.METER_MAX);
       if (st.dragging) $('objective').innerHTML = `DRAGGING — execution in ${st.dragging.execIn.toFixed(1)}s unless they're saved…`;
     } else {
       // tools
@@ -828,6 +929,20 @@ export class Match {
       const lights = $('emfLights').children;
       const lvl = this.tool === 'emf' && this.bat.emf > 0 ? st.emf : 0;
       for (let i = 0; i < 5; i++) lights[i].className = i < lvl ? (lvl >= 5 ? 'on5' : 'on') : '';
+      // tracker readout (part of the EMF tool): last active area + coarse charge
+      // + lock-on progress toward an identification clue
+      if (this.tool === 'emf' && this.bat.emf > 0 && st.track) {
+        const bars = '▮'.repeat(st.track.charge) + '▯'.repeat(4 - st.track.charge);
+        const lock = st.clue > 0 ? ` · LOCK ${Math.round(st.clue * 100)}%` : '';
+        $('trackRead').textContent = `${st.track.room || 'no activity'} · PWR ${bars}${lock}`;
+      } else $('trackRead').textContent = '--';
+      // disruptor + ward status
+      const dcd = st.disruptCd || 0;
+      $('disruptRead').textContent = dcd > 0 ? `${Math.ceil(dcd)}s` : 'READY';
+      $('toolDisrupt').className = 'tool' + (dcd > 0 ? ' dead' : ' on');
+      const wcd = st.ward || 0;
+      $('wardRead').textContent = wcd > 0 ? `${Math.ceil(wcd)}s` : 'READY';
+      $('toolWard').className = 'tool' + (wcd > 0 ? ' dead' : ' on');
       if (this.tool === 'thermo' && this.bat.thermo > 0) {
         const room = roomAt(this.pos.x, this.pos.z);
         $('thermoRead').textContent = room ? `${st.temps[room.id].toFixed(1)}°C — ${room.name}` : '--';
@@ -835,7 +950,7 @@ export class Match {
       // ritual line
       const r = st.ritual;
       $('ritualState').textContent = r.placed < r.total
-        ? `${r.placed}/${r.total} components placed`
+        ? `${r.placed}/${r.total} TRUE placed · ${r.identified}/${r.objects} identified`
         : r.progress < r.channelS
           ? `CHANNEL AT THE CIRCLE (${Math.round((r.progress / r.channelS) * 100)}%)`
           : 'COMPLETE';

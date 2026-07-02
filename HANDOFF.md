@@ -35,8 +35,9 @@ no banner). Restart any long-running server and hard-refresh clients to pick it 
 
 - `server/index.js` — HTTP static + WebSocket room manager (4-letter codes, 1 game per room)
 - `server/game.js` — ALL game rules, server-authoritative: meter, evidence, temps, kills,
-  ritual, win/lose. **`TUNE` at the top holds every balance number** (the design doc calls them
-  "starting positions, not specs" — tune here after playtests)
+  ritual, win/lose
+- `shared/tune.js` — **THE settings file: every balance number** (the design doc calls them
+  "starting positions, not specs" — tune here after playtests). Sent to clients at match start.
 - `shared/map.js` — house layout (8 rooms, walls with door gaps, furniture props, ritual circle
   in the Study, component spawn spots, player spawns). Used by both server and client
 - `public/js/main.js` — lobby/screen flow, net handlers, global error banner (`window.__reportErr`),
@@ -53,9 +54,11 @@ no banner). Restart any long-running server and hard-refresh clients to pick it 
 
 ## Game rules as implemented (per the doc's Phase-1 list)
 
-- Baseline haunt: ghost E near furniture; +7 meter ONLY if a living hunter is within 10m of the prop;
-  always drops an EMF evidence trace (decays 45s). Meter and evidence are the same action = the doc's
-  "race, not a timer".
+- Baseline haunt: ghost E near furniture; +7 meter (small props) / +12 (heavy props) ONLY if a living
+  hunter is within 10m of the prop; always drops an EMF evidence trace (decays 45s). Meter and evidence
+  are the same action = the doc's "race, not a timer". Heavy furniture (tables, fridges…) needs 50 meter
+  (HEAVY_HAUNT_AT) — interactions scale with the meter. A flashlight beam held on the ghost
+  (FLASH_SLOW_DEG cone, FLASH_SLOW_RANGE) multiplies haunt gain by FLASH_SLOW_FACTOR (0.3).
 - Meter 0–100; Hurl (Q, cost 10) + Clutter (C, cost 15, barricades nearest doorway, hunters clear with
   2s hold-E) unlock at 33; Crush (X, cost 35) needs target isolated (no teammate within 7m) AND
   slow-moving; 1.6s rising-block telegraph then slam. Rampage (R) at 100: ghost manifests visible,
@@ -63,10 +66,24 @@ no banner). Restart any long-running server and hard-refresh clients to pick it 
   (ghost stunned 3s). Meter zeroes when the window ends.
 - Wall-phasing: ghost walks through walls; glowing residue decal for 45s; drains 5 meter per phase
   only when meter ≥ 33.
-- Hunters: EMF reader (1), thermometer (2), flashlight (F, now ON by default) — all battery-limited.
-  Ritual: find 3 candles, carry one at a time to the circle in the Study, then hold-E channel 12s
-  (staggers interrupt; progress persists). Ritual done = hunters win; all hunters dead = ghost wins.
-  Dead hunters spectate (fly cam). Jumpscare + scream on death.
+- Hunters: EMF tracker (1 — proximity/evidence lights PLUS last-active-area + coarse ghost power 0-4),
+  thermometer (2), flashlight (F, ON by default; beam on ghost suppresses charging) — all battery-limited
+  (drain rates in TUNE). Disruptor (Q): server checks aim within DISRUPT_AIM_DEG half-angle and
+  DISRUPT_RANGE; hit = 10% meter drained (DISRUPT_DRAIN_FRAC), all ghost abilities locked
+  DISRUPT_LOCK_S (12s, phasing exempt), ghost drops visible trail markers for DISRUPT_TRAIL_S;
+  fires on DISRUPT_CD_S (40s) cooldown hit or miss. Ward: rescue-E on a dragged teammate consumes
+  the rescuer's ward, recharges in WARD_RECHARGE_S (90s).
+  Ritual identification puzzle: RITUAL_OBJECTS (6) candles spawn, only RITUAL_REAL (3) are genuine
+  (secret, random ids, never sent to clients unless revealed). Depositing a FALSE one destroys it,
+  gives the ghost WRONG_OBJECT_METER (25), and fires a team-wide red-flash + dissonant backfire sting.
+  The clue: EMF on within CLUE_RANGE (8m) of the ghost for CLUE_LOCK_S (3s) sustained (stagger/drag
+  breaks it) => CLUE_REVEALS (1) random objects identified team-wide (candle flames recolor
+  green=TRUE / red=FALSE; msg names the room). Tune penalty via WRONG_OBJECT_METER, clue strength
+  via CLUE_REVEALS/CLUE_LOCK_S/CLUE_RANGE.
+  Ritual: carry TRUE objects one at a time to the circle in the Study, then hold-E channel —
+  progress rate scales with channeler count (RITUAL_RATE_BY_CHANNELERS: solo 0.6x, duo 1x, trio 1.4x
+  toward CHANNEL_S=12; staggers interrupt; progress persists). Ritual done = hunters win; all hunters
+  dead = ghost wins. Dead hunters spectate (fly cam). Jumpscare + scream on death.
 - Server sends personalized state 15Hz: hunters never receive ghost position (EMF/dread/temps are
   computed server-side); ghost pos goes out only while manifested/dragging.
 

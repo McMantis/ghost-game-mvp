@@ -129,6 +129,40 @@ export function roar() {
   rumble(2.2, 0);
 }
 
+// disruptor fire: a sharp electric crackle
+export function zap(dist = 0) {
+  const v = Math.max(0.2, distVol(dist));
+  const c = ac(), t = c.currentTime;
+  const o = c.createOscillator(), g = c.createGain();
+  o.type = 'square';
+  o.frequency.setValueAtTime(1800, t);
+  o.frequency.exponentialRampToValueAtTime(220, t + 0.28);
+  env(g, t, 0.005, 0.5 * v, 0.3);
+  o.connect(g).connect(master);
+  o.start(t); o.stop(t + 0.35);
+  const n = noise(), nf = c.createBiquadFilter(), ng = c.createGain();
+  nf.type = 'highpass'; nf.frequency.value = 2500;
+  env(ng, t, 0.005, 0.3 * v, 0.18);
+  n.connect(nf).connect(ng).connect(master);
+  n.start(t); n.stop(t + 0.2);
+}
+
+// wrong ritual object: a dissonant power-surge sting — unmistakably "we fucked up"
+export function backfire() {
+  const c = ac(), t = c.currentTime;
+  for (const f0 of [220, 233, 110]) { // minor-second clash + sub
+    const o = c.createOscillator(), g = c.createGain(), f = c.createBiquadFilter();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(f0 * 0.4, t + 0.9);
+    f.type = 'lowpass'; f.frequency.value = 900;
+    env(g, t, 0.02, 0.4, 1.1);
+    o.connect(f).connect(g).connect(master);
+    o.start(t); o.stop(t + 1.15);
+  }
+  slam(0);
+}
+
 export function chime() {
   const c = ac(), t = c.currentTime;
   for (const [i, fr] of [660, 880].entries()) {
