@@ -31,8 +31,11 @@ export class Match {
     this.roomLights = built.roomLights;
 
     // my body
+    this.spawnX = spawn.x; this.spawnZ = spawn.z;
     this.pos = new THREE.Vector3(spawn.x, 1.6, spawn.z);
-    this.yaw = role === 'ghost' ? Math.PI : 0;
+    // face open space at spawn: hunters look east down the long hallway,
+    // the ghost looks through the dining-room door. Never spawn nose-to-wall.
+    this.yaw = role === 'ghost' ? Math.PI : -Math.PI / 2;
     this.pitch = 0;
     this.vel = new THREE.Vector3();
     this.speedNow = 0;
@@ -70,7 +73,7 @@ export class Match {
     this.shake = 0;
 
     // flashlight (hunter)
-    this.flash = new THREE.SpotLight(0xfff2d8, 60, 22, 0.45, 0.5, 1.4);
+    this.flash = new THREE.SpotLight(0xfff2d8, 38, 22, 0.5, 0.6, 1.6);
     this.flash.visible = false;
     scene.add(this.flash);
     scene.add(this.flash.target);
@@ -83,7 +86,7 @@ export class Match {
 
     // hunter tool state
     this.tool = null; // 'emf' | 'thermo'
-    this.flashOn = false;
+    this.flashOn = role === 'hunter'; // start lit — the dark is scarier once you choose it
     this.bat = { emf: 100, thermo: 100, flash: 100 };
     this.lastEmf = 0;
     this.carrying = null;
@@ -101,10 +104,19 @@ export class Match {
 
     this.clock = new THREE.Clock();
     this.rafId = 0;
+    this.frames = 0; this.fps = 0; this.fpsT = performance.now();
+    let errReported = false;
     const loop = () => {
       this.rafId = requestAnimationFrame(loop);
-      this.update(Math.min(0.05, this.clock.getDelta()));
-      renderer.render(scene, camera);
+      try {
+        this.update(Math.min(0.05, this.clock.getDelta()));
+        renderer.render(scene, camera);
+      } catch (err) {
+        if (!errReported) { errReported = true; window.__reportErr?.('frame error: ' + (err?.message || err)); }
+      }
+      this.frames++;
+      const now = performance.now();
+      if (now - this.fpsT > 1000) { this.fps = this.frames; this.frames = 0; this.fpsT = now; }
     };
     loop();
   }
@@ -131,8 +143,12 @@ export class Match {
     };
     this.onMouseMove = e => {
       if (document.pointerLockElement !== canvas) return;
-      this.yaw -= e.movementX * 0.0023;
-      this.pitch = clamp(this.pitch - e.movementY * 0.0023, -1.45, 1.45);
+      const mx = e.movementX, my = e.movementY;
+      // Chrome fires bogus giant movement deltas right after pointer lock engages —
+      // without this guard the camera gets flung into the ceiling on first mouse move.
+      if (!Number.isFinite(mx) || !Number.isFinite(my) || Math.abs(mx) > 200 || Math.abs(my) > 200) return;
+      this.yaw -= mx * 0.0023;
+      this.pitch = clamp(this.pitch - my * 0.0023, -1.45, 1.45);
     };
     this.onClick = () => { canvas.requestPointerLock(); sfx.unlock(); };
     this.onLockChange = () => {
@@ -285,6 +301,15 @@ export class Match {
 
   update(dt) {
     const nowS = performance.now() / 1000;
+
+    // self-heal: a single NaN in position or angles makes the projection matrix
+    // invalid and the canvas renders pure clear-color ("black screen").
+    if (!Number.isFinite(this.pos.x) || !Number.isFinite(this.pos.y) || !Number.isFinite(this.pos.z) ||
+        !Number.isFinite(this.yaw) || !Number.isFinite(this.pitch)) {
+      window.__reportErr?.(`camera state went NaN (pos ${this.pos.x},${this.pos.y},${this.pos.z} yaw ${this.yaw} pitch ${this.pitch}) — reset`);
+      this.pos.set(this.spawnX, 1.6, this.spawnZ);
+      this.yaw = 0; this.pitch = 0; this.vel.set(0, 0, 0);
+    }
 
     this.move(dt, nowS);
 
@@ -729,6 +754,12 @@ export class Match {
   setupHud() {
     $('hud').classList.remove('hidden');
     $('messages').innerHTML = '';
+    if (!$('dbgLine')) {
+      const d = document.createElement('div');
+      d.id = 'dbgLine';
+      d.style.cssText = 'position:absolute;bottom:2px;left:8px;font:11px monospace;color:#5a6a80;text-shadow:0 0 3px #000;';
+      $('hud').appendChild(d);
+    }
     if (this.role === 'ghost') {
       $('ghostHud').classList.remove('hidden');
       $('hunterHud').classList.add('hidden');
@@ -746,6 +777,9 @@ export class Match {
 
   updateHud() {
     const st = this.state;
+    const dbg = $('dbgLine');
+    if (dbg) dbg.textContent =
+      `${this.fps}fps pos ${this.pos.x.toFixed(1)},${this.pos.z.toFixed(1)} yaw ${this.yaw.toFixed(2)} pitch ${this.pitch.toFixed(2)} lock:${document.pointerLockElement ? 'Y' : 'N'}${this.dead ? ' DEAD' : ''}`;
     // interact prompt
     let promptText = '';
     if (!this.dead && !this.over) {

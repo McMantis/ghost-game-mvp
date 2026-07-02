@@ -1,9 +1,9 @@
-// Headless test client: joins a room as a hunter, stands around, logs everything.
-// Usage: node scripts/bot.js <ROOMCODE> [name] [logfile]
+// Headless test client: joins a room, stands around, logs everything.
+// Usage: node scripts/bot.js <ROOMCODE> [name] [logfile] [role=hunter]
 import WebSocket from 'ws';
 import fs from 'fs';
 
-const [, , code, name = 'Bot', logfile] = process.argv;
+const [, , code, name = 'Bot', logfile, role = 'hunter'] = process.argv;
 if (!code) { console.error('usage: node scripts/bot.js <ROOMCODE> [name] [logfile]'); process.exit(1); }
 
 const log = line => {
@@ -19,8 +19,8 @@ let posTimer = null;
 
 ws.on('open', () => {
   ws.send(JSON.stringify({ t: 'join', code, name }));
-  ws.send(JSON.stringify({ t: 'role', role: 'hunter' }));
-  log(`connected, joining ${code} as ${name}`);
+  ws.send(JSON.stringify({ t: 'role', role }));
+  log(`connected, joining ${code} as ${name} (${role})`);
 });
 
 ws.on('message', data => {

@@ -7,6 +7,21 @@ const $ = id => document.getElementById(id);
 const show = id => $(id).classList.remove('hidden');
 const hide = id => $(id).classList.add('hidden');
 
+// visible error reporting — a playtest machine has no devtools open
+window.__reportErr = msg => {
+  let b = $('errBanner');
+  if (!b) {
+    b = document.createElement('div');
+    b.id = 'errBanner';
+    b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:70;background:#7a1c1c;color:#ffd0d0;' +
+      'font:13px monospace;padding:6px 12px;white-space:pre-wrap;';
+    document.body.appendChild(b);
+  }
+  b.textContent = 'ERROR (screenshot this for Claude): ' + msg;
+};
+addEventListener('error', e => window.__reportErr(`${e.message} @ ${(e.filename || '').split('/').pop()}:${e.lineno}`));
+addEventListener('unhandledrejection', e => window.__reportErr('promise: ' + (e.reason?.message || e.reason)));
+
 const net = new Net();
 let myId = null;
 let isHost = false;

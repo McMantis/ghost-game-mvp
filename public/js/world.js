@@ -92,7 +92,7 @@ export function buildHouse(scene) {
     scene.add(bulb);
   }
 
-  scene.add(new THREE.AmbientLight(0x304060, 0.55));
+  scene.add(new THREE.AmbientLight(0x304060, 0.8));
 
   // ritual circle
   const ring = new THREE.Mesh(
