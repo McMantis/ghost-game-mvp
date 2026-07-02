@@ -1,4 +1,4 @@
-// All sound is procedural WebAudio — no asset files needed.
+// SFX are procedural WebAudio; menu music is the one asset file (audio/menu_music.mp3).
 let ctx = null;
 let master = null;
 
@@ -225,3 +225,60 @@ export function setHeartbeat(dread) {
 }
 
 export function stopLoops() { setEmfBeep(0); setHeartbeat(0); }
+
+// ---- menu music (looping mp3) ----
+
+let menuTrack = null;
+let menuMusicWanted = false;
+let menuFade = null;
+let menuVol = (() => { const v = parseFloat(localStorage.getItem('ggMusicVol')); return Number.isFinite(v) ? v : 0.45; })();
+let menuMuted = localStorage.getItem('ggMusicMuted') === '1';
+
+export function musicVolume() { return menuVol; }
+export function musicMuted() { return menuMuted; }
+
+export function setMusicVolume(v) {
+  menuVol = Math.min(1, Math.max(0, v));
+  localStorage.setItem('ggMusicVol', String(menuVol));
+  if (menuTrack && !menuFade) menuTrack.volume = menuVol;
+}
+
+export function setMusicMuted(m) {
+  menuMuted = m;
+  localStorage.setItem('ggMusicMuted', m ? '1' : '0');
+  if (menuTrack) menuTrack.muted = m;
+}
+
+export function startMenuMusic() {
+  menuMusicWanted = true;
+  if (!menuTrack) {
+    menuTrack = new Audio('audio/menu_music.mp3');
+    menuTrack.loop = true;
+    window.__menuMusic = menuTrack; // debug/playtest hook
+  }
+  if (menuFade) { clearInterval(menuFade); menuFade = null; }
+  menuTrack.volume = menuVol;
+  menuTrack.muted = menuMuted;
+  menuTrack.play().catch(() => {
+    // Autoplay is blocked until the user interacts — start on the first gesture.
+    const kick = () => {
+      removeEventListener('pointerdown', kick);
+      removeEventListener('keydown', kick);
+      if (menuMusicWanted) menuTrack.play().catch(() => {});
+    };
+    addEventListener('pointerdown', kick);
+    addEventListener('keydown', kick);
+  });
+}
+
+export function stopMenuMusic() {
+  menuMusicWanted = false;
+  if (!menuTrack || menuTrack.paused) return;
+  if (menuFade) clearInterval(menuFade);
+  menuFade = setInterval(() => {
+    if (menuTrack.volume > 0.05) { menuTrack.volume -= 0.05; return; }
+    clearInterval(menuFade); menuFade = null;
+    menuTrack.pause();
+    menuTrack.volume = menuVol;
+  }, 50);
+}

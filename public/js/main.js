@@ -31,11 +31,26 @@ let match = null;
 function screen(name) {
   for (const s of ['screen-menu', 'screen-lobby', 'screen-end']) hide(s);
   if (name) show(name);
+  if (name === 'screen-menu' || name === 'screen-lobby') { sfx.startMenuMusic(); show('musicCtl'); }
+  else { sfx.stopMenuMusic(); hide('musicCtl'); }
 }
 
 // ---- menu ----
 
 $('nameInput').value = localStorage.getItem('ggName') || '';
+sfx.startMenuMusic(); // title screen is visible on load; actual playback may wait for first click/keypress (autoplay policy)
+
+// ---- music volume control ----
+
+const volSlider = $('volSlider'), btnMute = $('btnMute');
+volSlider.value = Math.round(sfx.musicVolume() * 100);
+const muteIcon = () => { btnMute.textContent = sfx.musicMuted() ? '🔇' : '🔊'; };
+muteIcon();
+volSlider.oninput = () => {
+  sfx.setMusicVolume(volSlider.value / 100);
+  if (sfx.musicMuted()) { sfx.setMusicMuted(false); muteIcon(); } // adjusting volume un-mutes
+};
+btnMute.onclick = () => { sfx.setMusicMuted(!sfx.musicMuted()); muteIcon(); };
 
 async function ensureConnected() {
   if (net.ws && net.ws.readyState === 1) return true;

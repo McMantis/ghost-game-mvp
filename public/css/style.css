@@ -39,6 +39,13 @@ button.big:hover { background: #256353; }
 .hunterBtn:hover { background: #1c3a52; }
 button.picked { outline: 2px solid #7be0c0; }
 
+/* ---------- music control ---------- */
+#musicCtl { position: fixed; right: 18px; bottom: 16px; z-index: 45; display: flex; align-items: center; gap: 8px;
+  background: rgba(10, 14, 24, .85); border: 1px solid #26304a; border-radius: 10px; padding: 6px 12px; }
+#musicCtl button { padding: 2px 6px; font-size: 16px; background: none; border: none; line-height: 1; }
+#musicCtl button:hover { background: none; text-shadow: 0 0 10px rgba(123, 224, 192, .8); }
+#musicCtl input[type=range] { width: 90px; margin: 0; padding: 0; border: none; background: transparent; accent-color: #7be0c0; }
+
 /* ---------- HUD ---------- */
 #hud { position: fixed; inset: 0; pointer-events: none; z-index: 20; }
 #crosshair { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px;
